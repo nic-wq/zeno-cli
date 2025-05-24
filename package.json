@@ -1,0 +1,46 @@
+{
+  "name": "@nic-wq/zeno-cli",
+  "version": "1.0.0",
+  "description": "An intelligent CLI chatbot powered by Google Gemini, with web search and file manipulation capabilities.",
+  "main": "zeno.js",
+  "type": "module",
+  "bin": {
+    "zeno": "./zeno.js"
+  },
+  "scripts": {
+    "start": "node zeno.js"
+  },
+  "keywords": [
+    "chatbot",
+    "cli",
+    "ai",
+    "gemini",
+    "google",
+    "terminal",
+    "automation",
+    "zeno"
+  ],
+  "author": "nic-wq)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/zeno-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nic-wq/zeno-cli/issues"
+  },
+  "homepage": "https://github.com/nic-wq/zeno-cli",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.11.3",
+    "chalk": "^5.3.0"
+  },
+  "files": [
+    "zeno.js",
+    "file.js",
+    "README.md",
+    "LICENSE"
+  ]
+}
