@@ -14,11 +14,18 @@ import * as FileOps from './file.js';
 
 // --- Configuration ---
 const CONFIG_DIR = path.join(os.homedir(), ".config", "zeno");
-const CONFIG_FILE = path.join(CONFIG_DIR, "config.json"); // Combined config
+const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const CHAT_HISTORY_FILE = path.join(CONFIG_DIR, "zeno_chat_history.json");
 
+// Add Research Mode Configuration
+let isResearchModeEnabled = false;
+let currentResearchPath = null;
+let currentResearchTopics = [];
+
+// --- Constants ---
 const ACTIVE_MODEL = "gemini-2.5-flash-preview-05-20"; // Or your preferred model
 
+// --- Variables ---
 let apiKey;
 let genAI;
 let chat;
@@ -83,10 +90,26 @@ const fileSystemToolDeclarations = [
   }
 ];
 
+// Add to Tool Definitions after fileSystemToolDeclarations
+const researchToolDeclarations = [
+  {
+    name: "mark_as_finished",
+    description: "Mark the search process as finished",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: []
+    }
+  }
+];
+
 function getActiveTools() {
   let activeToolDeclarations = [...webSearchTool.functionDeclarations];
   if (isFilesModeEnabled && (filesWorkingDirectory || tempFilesWorkingDirectory)) {
     activeToolDeclarations.push(...fileSystemToolDeclarations);
+  }
+  if (isResearchModeEnabled) {
+    activeToolDeclarations.push(...researchToolDeclarations);
   }
   return [{ functionDeclarations: activeToolDeclarations }];
 }
@@ -243,6 +266,110 @@ async function handleToolConfirmation(rlInstance, toolCall) {
 }
 
 
+// --- Research Functions ---
+async function initializeResearch(topic) {
+  const sanitizedTopic = topic.replace(/[^a-zA-Z0-9-_]/g, '_').toLowerCase();
+  const researchDir = path.join(process.cwd(), `research_${sanitizedTopic}`);
+  
+  try {
+    await fs.mkdir(researchDir, { recursive: true });
+    currentResearchPath = researchDir;
+    
+    // Create details.md file
+    const detailsPath = path.join(researchDir, 'details.md');
+    await fs.writeFile(detailsPath, `# Research Details: ${topic}\n\n## Search History\n\n`);
+    
+    console.log(chalk.green(`Research initialized at: ${researchDir}`));
+    return true;
+  } catch (error) {
+    console.error(chalk.red(`Error initializing research: ${error.message}`));
+    return false;
+  }
+}
+
+async function generateResearchTopics(topic) {
+  console.log(chalk.yellow("Generating research topics..."));
+  
+  const prompt = `As a research coordinator, generate 15 specific topics that need to be investigated for a comprehensive research on "${topic}". 
+    Format each topic as a numbered list item. Make them specific and actionable for web research.`;
+  
+  const result = await chat.sendMessage(prompt);
+  const topicsText = result.response.text();
+  
+  // Save topics to research directory
+  const topicsPath = path.join(currentResearchPath, 'topics.md');
+  await fs.writeFile(topicsPath, `# Research Topics for ${topic}\n\n${topicsText}`);
+  
+  // Parse topics into array
+  currentResearchTopics = topicsText
+    .split('\n')
+    .filter(line => line.match(/^\d+\./))
+    .map(line => line.replace(/^\d+\.\s*/, '').trim());
+
+  // Start automated research process
+  await startAutomatedResearch(topic);
+  
+  return currentResearchTopics;
+}
+
+async function startAutomatedResearch(topic) {
+  console.log(chalk.cyan("\nStarting automated research process..."));
+  
+  for (let i = 0; i < currentResearchTopics.length; i++) {
+    const currentTopic = currentResearchTopics[i];
+    console.log(chalk.yellow(`\nResearching topic ${i + 1}/${currentResearchTopics.length}:`));
+    console.log(chalk.yellow(currentTopic));
+    
+    // Perform web search
+    const searchResult = await executeWebSearch(currentTopic);
+    
+    // Analyze results
+    const analysisPrompt = `Analyze this search result and provide a detailed, well-structured summary for our research on "${topic}". Focus on key findings, verified facts, and relevant details:\n${searchResult}`;
+    const analysis = await chat.sendMessage(analysisPrompt);
+    
+    // Append to details.md with clear section marking
+    await appendToDetails(`\n## Topic ${i + 1}: ${currentTopic}\n\n### Search Results & Analysis\n\n${analysis.response.text()}\n\n---\n`);
+  }
+  
+  // Auto-trigger final report generation
+  const reportPath = await generateFinalReport(topic);
+  console.log(chalk.green(`\nResearch complete! Final report saved at: ${reportPath}`));
+  
+  // Clean up
+  isResearchModeEnabled = false;
+  currentResearchPath = null;
+  currentResearchTopics = [];
+}
+
+async function appendToDetails(content) {
+  if (!currentResearchPath) return;
+  const detailsPath = path.join(currentResearchPath, 'details.md');
+  await fs.appendFile(detailsPath, `\n${content}\n`);
+}
+
+async function generateFinalReport(topic) {
+  console.log(chalk.yellow("Generating final report..."));
+  
+  // Read all research details
+  const detailsPath = path.join(currentResearchPath, 'details.md');
+  const details = await fs.readFile(detailsPath, 'utf-8');
+  
+  const prompt = `Based on all the research data below, create a professional, high-quality technical report of 4-5 pages. 
+    Format it in Markdown with proper sections, executive summary, and detailed analysis.
+    Research Data:
+    ${details}`;
+  
+  const result = await chat.sendMessage(prompt);
+  const report = result.response.text();
+  
+  // Save final report
+  const reportPath = path.join(currentResearchPath, 'final_report.md');
+  await fs.writeFile(reportPath, report);
+  
+  return reportPath;
+}
+
+
 // --- Command Handlers ---
 async function toggleFilesMode(rlInstance) {
     if (isFilesModeEnabled) {
@@ -285,7 +412,33 @@ async function toggleFilesMode(rlInstance) {
     startNewChatSession(); // Re-initialize with new toolset
 }
 
+async function handleResearchMode(rlInstance) {
+  if (isResearchModeEnabled) {
+    console.log(chalk.yellow("Research mode is already active."));
+    return;
+  }
 
+  const topic = await rlInstance.question(chalk.blue("Enter research topic: "));
+  if (!topic.trim()) {
+    console.log(chalk.red("Research topic cannot be empty."));
+    return;
+  }
+
+  if (await initializeResearch(topic)) {
+    isResearchModeEnabled = true;
+    console.log(chalk.green("\nInitializing automated research process for:"), chalk.bold(topic));
+    console.log(chalk.cyan("Zeno will automatically:"));
+    console.log(chalk.cyan("1. Generate research topics"));
+    console.log(chalk.cyan("2. Research each topic systematically"));
+    console.log(chalk.cyan("3. Save findings and generate final report"));
+    console.log(chalk.cyan("You can continue chatting while the research is in progress.\n"));
+    
+    // Generate topics and start automated research
+    await generateResearchTopics(topic);
+  }
+}
+
+// Add to displayHelp()
 function displayHelp() {
   console.log(chalk.cyan("\nZeno Chat Commands:"));
   console.log(chalk.cyan(`  Model: ${ACTIVE_MODEL}`));
@@ -294,6 +447,7 @@ function displayHelp() {
   console.log(chalk.cyan("  /clear      - Clear chat history and start fresh"));
   console.log(chalk.cyan("  /help       - Show this help message"));
   console.log(chalk.cyan("  /exit       - Exit Zeno"));
+  console.log(chalk.cyan("  /research   - Start a new research project"));
   console.log(chalk.cyan("  Current file mode: " + (isFilesModeEnabled ? chalk.green(`ENABLED for ${chalk.bold(tempFilesWorkingDirectory || filesWorkingDirectory || 'N/A')}`) : chalk.red("DISABLED"))));
   console.log("");
 }
@@ -345,6 +499,10 @@ async function main() {
             console.log(chalk.yellow("Chat history cleared.")); continue;
         }
         if (command === "/files") { await toggleFilesMode(rl); continue; }
+        if (command === "/research") { 
+          await handleResearchMode(rl); 
+          continue; 
+        }
         console.log(chalk.red(`Unknown command: ${userInput}`));
         continue;
     }
